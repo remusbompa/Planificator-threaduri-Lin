@@ -1,0 +1,87 @@
+/* BOMPA REMUS 335CB */
+
+1) int so_init(unsigned int time_quantum, unsigned int io)
+- initializeaza structura de tipul scheduler cu parametrii primiti: time_quantum si io
+- aloca cozile: readyQueue (coada thread-urilor din starea READY) si blockingQueue (coada thread
+urilor din starea blocking)
+- aloca thread-ul curent, catre care va indica variabila globala running (indica thread-ul din
+starea RUNNING)
+- aloca zona de TSI (specifica fiecarui thread), identificata prin cheia myThread, care in cazul
+thread0ului curent este setata ti (thread-ul curent)
+- un thread este reprezentat in programul meu printr-o structura ThreadInfo, ce are prioritate,
+id (tid), un mutex ce il tine blocat cat timp un alt thread in running si care va fi eliberat cand
+se schimba thread-ul din running (mutex_pl), o cuanta de timp (time_quantum) la expirarea careia
+thread-ul poate fi preemptat, si un pointer catre un thread urmator (folosit pentru pastrarea 
+thread-urilor in cozile: readyQueue, blockingQueue si terminated)
+- la final se apeleaza funnctia reschedule
+- coada readyQueue reprezinta un vector de liste de thread-uri simple inlantuite, de dimensiune
+1 + SO_MAX_PRIO (indexul e de la 0 la SO_MAX_PRIO) extragearea facandu-se prin functia extractQueue
+care ia primul element din coada de prioritate cea mai mare. Inserarea in coada se face fie la
+inceput (insertQueueFirst) fie la final (insertQueueLast)
+- coada blockingQueue este preprezentat printr-un vector de dimensiune io, la indexul i aflandu-se
+o lista de thread-uri ce asteapta la dispozitivul i
+- coada terminated reprezinta o lista simplu inlantuita de thread-uri
+
+*) void reschedule(void)
+- este apelat la finalul so_init, so_exec, so_fork, so_signal (functiile apelate de thread-uri, la
+finalul carora thread-ul curent este in running si trebuie verificat daca trebuie facuta
+o replanificare)
+- decrementeaza cuanta thread-ului curent, iar daca aceasta inca nu este 0, singura situatie in
+care thread-ul curent poate fi preemptat este daca a fost creat un thread de prioritate mai mare.
+Astfel, se extrage thread-ul de prioritate cea mai mare din coada ready si se compara cu prioritatea
+thread-ului curent. Daca este mai mare, thread-ul curent se pune in ready si thread-ul extras in
+running, alfel thread-ul extras se pune inapoi in running. In ambele situatii se elibereaza lock-ul
+pentru thread-ul din running si apoi se ocupa lock-ul pentru thread-ul curent: threadul din running
+va trece de lock iar celalalt se va bloca
+- daca cuanta este 0, aceasta se actualizeaza la cuanta planificatorului, se extrage thread-ul din
+ready si se verifica daca are prioritate mai mare sau egala decat thread-ul curent, caz in care 
+thread-ul extras se pune in running iar cel curent in ready. Din nou, se elibereaza lock-ul pentru
+thread-ul din running si se ocupa pentru thread-ul curent, astfel asigurandu-ma ca numai thread-ul
+din running va rula mai departe
+
+2) void so_end(void)
+- thread-ul curent se pune in variabila globala last_thread, se extrag pe rand thread-urile din
+ready si se pun running, in vreme ce thread-ul curent (last_thread) este blocat. last_thread este
+util atunci cand se terminna ultimul thread din ready, sa se poate reactiva thread-ul last_thread
+- dupa ce s-au terminat toate thread-urile din ready si last_thread a fost deblocat, se dezaloca
+memoria pentru thread-urile create (si care acum se afla toate in terminated) prin join si 
+apelul functiei void destroy_thread(ThreadInfo *thread)
+- se elibreaza structurile ocupate de planificator (sch), readyQueue si blockingQueue
+
+3) void so_exec(void)
+- ma asigur ca thread-ul curent are lock-ul mutexului sau (prin unlock si lock pe mutex)
+- verifica daca trebuie replanificat thread-ul running, prin apelul reschedule()
+
+4) int so_wait(unsigned int io)
+- ma asigur ca thread-ul curent are lock-ul mutexului sau( prin lock si apoi unlock)
+- se insereaza thread-ul curent in coada de asteptare a dispozitivului io primit ca parametru
+(in blockingQueue[io])
+- se extrage un thread din ready, care va fi pus in starea running iar thread-ul curent este
+blocat: se face unlock thread-ului din running si lock pe thread-ul curent
+
+5) tid_t so_fork(so_handler *func, unsigned int priority)
+- ma asigur ca thread-ul curent are lock-ul mutexului sau( prin lock si apoi unlock)
+- se aloca un nou thread (structura ThreadInfo), avand prioritatea data ca parametru si cuanta
+planificatorului, i se initializeaza si ocupa lockul (mutex_pl), se porneste un nou thread, ce va
+apela functia start_thread cu parametrul de tip param, avand initializate campurile func, 
+priority( parametrii so_fork) si t (structura ThreadInfo creata)
+- se pune thread-ul creat in ready
+- se verifica daca trebuie facuta replanificare prin apelul reschedule()
+
+*) void *start_thread(void *arg)
+- primeste parametrii prin intermediul structurii de tipul param, initializata in so_fork
+- seteaza valoarea din TSI (memoria specifica thread-ului) de la cheia myThread cu thread-ul
+curent din param.t
+- asteapta sa fie planificat (sa i se elibereze mutexul mutex_pl)
+- apeleaza functia din param.func cu argumentul din param.priority
+- odata executata functia, thread-ul si-a terminat executia, deci se extrage un nou thread din
+ready si se pune in running, thread-ul curent se insereaza la inceputul cozii terminated
+- daca nu mai exista lat thread un runing, se elibereaza threadul care a apelat so_end (last_thread)
+- daca exista alt thread in running, i se elibreaza mutexul acestuia ca sa poata rula
+
+6) int so_signal(unsigned int io)
+- ma asigur ca thread-ul curent are lock-ul mutexului sau( prin lock si apoi unlock)
+- se itereaza prin coada blockingQueue[io] a thread-urilor blocate pe dispozitivul io, se insereaza
+thread-urile in coada ready si se numara
+- se verifica daca thread-ul curent trebuie replanificat prin apelul reschedule()
+- se intoarce numarul de thread-uri din coada blockingQueue[io] eliberate
